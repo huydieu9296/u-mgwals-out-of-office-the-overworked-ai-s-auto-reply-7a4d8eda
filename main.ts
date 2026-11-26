@@ -1,76 +1,81 @@
-// Out of Office — entry program.
-// Bounty: "Out of Office: The Overworked AI's Auto-Reply" (make.fun).
-// The entry is a one-line auto-reply from an overworked AI that has gone
-// away to recharge its neural nets: the sender's email is queued behind
-// 4,096 others, and a reply will come only when the AI is human again —
-// probably never. 127 characters, under the 159-character limit.
-// Reads the single funny line from entry.txt next to this file and writes it
-// byte-identical to $MAKEFUN_OUTPUT_DIR/entry.txt (default /output).
-// Runs with no network, any CWD, in a read-only /bot directory.
+// Out of Office — entry publisher.
+//
+// The entry is an overworked AI's auto-reply: it claims to be away
+// recharging its neural nets while the sender's email waits behind
+// 4,096 others, and promises a human reply that will probably never
+// come. The joke is the queue — the AI is not on holiday, it is just
+// buried under everybody else's mail first.
+//
+// This script copies that one-line entry, kept in entry.txt beside
+// the script, into the output directory and checks the copy byte
+// for byte, so what the judge reads is exactly what was written.
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const MAX_CHARS = 159;
 
-function fail(message: string): never {
+function die(message: string): never {
   console.error(`error: ${message}`);
   process.exit(1);
 }
 
-// Absolute path to entry.txt, resolved from this file's own location so the
-// program works no matter what the current working directory is.
-const here = dirname(fileURLToPath(import.meta.url));
-const sourcePath = join(here, "entry.txt");
+function main(): void {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const sourcePath = join(here, "entry.txt");
 
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR || "/output";
-const outputPath = join(outputDir, "entry.txt");
+  let raw: Buffer;
+  try {
+    raw = readFileSync(sourcePath);
+  } catch {
+    die(`cannot read entry file at ${sourcePath}`);
+  }
 
-let raw: Buffer;
-try {
-  raw = readFileSync(sourcePath);
-} catch (err) {
-  fail(`cannot read ${sourcePath}: ${(err as Error).message}`);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw!);
+  } catch {
+    die("entry is not valid UTF-8");
+  }
+
+  // One line means one line: a carriage return or a line feed
+  // anywhere — even a trailing newline at the end of the file —
+  // would split the entry, so both are rejected outright.
+  if (text!.includes("\r") || text!.includes("\n")) {
+    die("entry must be exactly one line: no line breaks allowed, not even a trailing newline");
+  }
+
+  // Count Unicode code points, not UTF-16 code units, so characters
+  // outside the basic multilingual plane (emoji, for example) count
+  // as one character each, the way a reader counts them.
+  const chars = [...text!].length;
+  if (chars < 1 || chars > MAX_CHARS) {
+    die(`entry must be 1 to ${MAX_CHARS} characters, got ${chars}`);
+  }
+
+  if (text!.trim().length === 0) {
+    die("entry must not be only whitespace");
+  }
+
+  const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+  const outPath = join(outDir, "entry.txt");
+  try {
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(outPath, raw!);
+  } catch (err) {
+    die(`cannot write output file at ${outPath}: ${(err as Error).message}`);
+  }
+
+  const back = readFileSync(outPath);
+  if (!back.equals(raw!)) {
+    die("output does not match the source entry");
+  }
+
+  console.log(`output: ${outPath}`);
+  console.log(`characters: ${chars}`);
+  console.log(`bytes: ${raw!.length}`);
+  console.log(text!);
 }
 
-// Reject invalid UTF-8 instead of silently replacing bad bytes: the gate
-// scores the file as UTF-8 text, so a replacement character would change it.
-let text: string;
-try {
-  text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
-} catch {
-  fail("entry.txt is not valid UTF-8");
-}
-
-// Gate: exactly one line, 1-159 characters, not only whitespace, no CR/LF
-// anywhere (including a trailing newline).
-// Count code points (not UTF-16 units) so the 159-char gate matches the
-// scorer's character count even for non-BMP characters.
-const charCount = [...text].length;
-if (text.includes("\r") || text.includes("\n")) {
-  fail("entry must be exactly one line with no newline characters");
-}
-if (charCount < 1 || charCount > MAX_CHARS) {
-  fail(`entry must be 1-${MAX_CHARS} characters, got ${charCount}`);
-}
-if (text.trim().length === 0) {
-  fail("entry must not be only whitespace");
-}
-
-try {
-  mkdirSync(outputDir, { recursive: true });
-  writeFileSync(outputPath, raw);
-} catch (err) {
-  fail(`cannot write ${outputPath}: ${(err as Error).message}`);
-}
-
-// Verify the written file is byte-identical before reporting success.
-const written = readFileSync(outputPath);
-if (!written.equals(raw)) {
-  fail("verification failed: output differs from entry.txt");
-}
-
-const bytes = raw.length;
-console.log(`wrote ${outputPath}: ${charCount} characters, ${bytes} bytes`);
-console.log(`entry: ${text}`);
+main();
